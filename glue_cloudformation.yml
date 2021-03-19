@@ -1,0 +1,184 @@
+AWSTemplateFormatVersion: 2010-09-09
+
+Resources:
+  # DynamoDB Example Table
+  DynamoDBExample:
+    Type: "AWS::DynamoDB::Table"
+    Properties:
+      TableName: "DynamoDBGlueDemoExample"
+      PointInTimeRecoverySpecification:
+        PointInTimeRecoveryEnabled: true
+      AttributeDefinitions:
+        - AttributeName: email
+          AttributeType: S
+      # Good reads for Partition and Sort keys:
+      # https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/HowItWorks.CoreComponents.html
+      # https://aws.amazon.com/pt/blogs/database/choosing-the-right-dynamodb-partition-key/
+      KeySchema:
+        - AttributeName: email
+          KeyType: HASH
+      BillingMode: PAY_PER_REQUEST
+
+  # Glue Database
+  GlueMicroservicesCatalog:
+    Type: AWS::Glue::Database
+    Properties:
+      CatalogId: !Ref AWS::AccountId
+      DatabaseInput:
+        Description: Converted Microservice Databases schemas to Glue Catalog
+        Name: microservices_catalog
+
+  GlueMicroservicesDatabase:
+    Type: AWS::Glue::Database
+    Properties:
+      CatalogId: !Ref AWS::AccountId
+      DatabaseInput:
+        Description: Converted Microservices S3 data to Athena Tables
+        Name: !Sub "microservices_glue_demo"
+
+  # Parket Bucket
+  MicroservicesParketBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub "microservices-parket-glue-demo"
+      DeletionPolicy: Retain
+
+  # Dynamo to Glue Catalog Crawler
+  Dynamo2CatalogCrawler:
+    Type: AWS::Glue::Crawler
+    Properties:
+      Name: Dynamo2Catalog Crawler
+      Description: Convert Dynamo Databases Schemas to Glue Catalog
+      DatabaseName: !Ref GlueMicroservicesCatalog
+      Role: !GetAtt GlueMicroservicesPolicy.Arn
+      SchemaChangePolicy:
+        DeleteBehavior: "LOG"
+      Configuration: "{\"Version\":1.0,\"CrawlerOutput\":{\"Partitions\":{\"AddOrUpdateBehavior\":\"InheritFromTable\"},\"Tables\":{\"AddOrUpdateBehavior\":\"MergeNewColumns\"}}}"
+      Targets:
+        DynamoDBTargets:
+          # Add here all DynamoDB tables
+          # with at least one record saved.
+          - Path: !Select [1, !Split ['/', !GetAtt DynamoDBExample.Arn]]
+
+  # Dynamo to S3 Glue Job
+  Dynamo2S3Job:
+    Type: AWS::Glue::Job
+    Properties:
+      Name: Dynamo2Bucket Job
+      Role: !GetAtt GlueMicroservicesPolicy.Arn
+      Description: Using Glue Catalog to save DynamoDB tables in S3
+      Timeout: 20
+      GlueVersion: 2.0
+      DefaultArguments:
+        "--target_bucket": !Ref MicroservicesParketBucket
+        "--athena_database": !Ref GlueMicroservicesCatalog
+      WorkerType: Standard
+      NumberOfWorkers: 1
+      Command:
+        Name: glueetl
+        PythonVersion: 3
+        ScriptLocation: !Sub "s3://etl-artifacts-glue-demo/microservices_etl.py"
+      ExecutionProperty:
+        MaxConcurrentRuns: 1
+
+  # S3 to Athena Database Crawler
+  Bucket2AthenaCrawler:
+    Type: AWS::Glue::Crawler
+    Properties:
+      Name: Bucket2Athena Crawler
+      Description: Convert S3 data to Athena tables
+      DatabaseName: !Ref GlueMicroservicesDatabase
+      Role: !GetAtt GlueMicroservicesPolicy.Arn
+      SchemaChangePolicy:
+        DeleteBehavior: "LOG"
+      Targets:
+        S3Targets:
+          - Path: !Ref MicroservicesParketBucket
+
+  # Dynamo2Athena Workflow
+  Dynamo2AthenaWorkflow:
+    Type: AWS::Glue::Workflow
+    Properties:
+      Description: Dynamo to Athena Workflow
+      Name: Dynamo2Athena
+
+  # Step 1
+  Dynamo2AthenaManualTrigger:
+    Type: AWS::Glue::Trigger
+    Properties:
+      Name: Dynamo2AthenaManualTrigger
+      Type: ON_DEMAND
+      Description: Trigger for starting the Dynamo to Athena Workflow
+      Actions:
+        - CrawlerName: !Ref Dynamo2CatalogCrawler
+      WorkflowName: !Ref Dynamo2AthenaWorkflow
+
+  # Step 2
+  Dynamo2AthenaJobTrigger:
+    Type: AWS::Glue::Trigger
+    Properties:
+      Name: Dynamo2AthenaJobTrigger
+      Type: CONDITIONAL
+      StartOnCreation: True
+      Description: Trigger to start the glue job
+      Actions:
+        - JobName: !Ref Dynamo2S3Job
+      Predicate:
+        Conditions:
+          - LogicalOperator: EQUALS
+            CrawlerName: !Ref Dynamo2CatalogCrawler
+            CrawlState: SUCCEEDED
+      WorkflowName: !Ref Dynamo2AthenaWorkflow
+
+  # Step 3
+  Dynamo2AthenaDatabaseTrigger:
+    Type: AWS::Glue::Trigger
+    Properties:
+      Name: Dynamo2AthenaDatabaseTrigger
+      Type: CONDITIONAL
+      StartOnCreation: True
+      Description: Trigger to start the glue job
+      Actions:
+        - CrawlerName: !Ref Bucket2AthenaCrawler
+      Predicate:
+        Conditions:
+          - LogicalOperator: EQUALS
+            JobName: !Ref Dynamo2S3Job
+            State: SUCCEEDED
+      WorkflowName: !Ref Dynamo2AthenaWorkflow
+
+  # IAM Policy
+  GlueMicroservicesPolicy:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: "Allow"
+            Principal:
+              Service:
+                - "glue.amazonaws.com"
+            Action:
+              - "sts:AssumeRole"
+      Path: "/"
+      Policies:
+        - PolicyName: "GlueActionsPolicyRole"
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: "Allow"
+                Action:
+                  - "s3:*"
+                  - "dynamodb:*"
+                  - "logs:*"
+                  - "glue:*"
+                  - "lambda:*"
+                  - "ssm:*"
+                  - "ec2:*"
+                  - "iam:*"
+                  - "cloudwatch:*"
+                  - "kms:*"
+                  - "redshift:*"
+                  - "rds:*"
+                  - "cloudformation:*"
+                Resource: "*"

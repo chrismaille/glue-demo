@@ -1,0 +1,40 @@
+name: deploy
+on:
+  push:
+    branches:
+      - master
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout branch
+        uses: actions/checkout@v2
+      - name: Setup Python
+        uses: actions/setup-python@v1.1.1
+        with:
+          python-version: 3.8
+      - name: Run Pre-Commit
+        uses: pre-commit/action@v2.0.0
+      - name: Setup Poetry
+        uses: Gr1N/setup-poetry@v1
+      - name: Create Release
+        uses: cycjimmy/semantic-release-action@v2
+        with:
+          semantic_version: 16
+          branches: |
+            [
+              '+([0-9])?(.{+([0-9]),x}).x',
+              'main',
+              'next',
+              'next-major',
+              {
+                name: 'beta',
+                prerelease: true
+              },
+              {
+                name: 'alpha',
+                prerelease: true
+              }
+            ]
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
