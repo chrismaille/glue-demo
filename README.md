@@ -1,6 +1,6 @@
 ## Welcome to Glue ETL Example
 
-[![Release](https://github.com/chrismaille/glue-demo/workflows/release/badge.svg)](https://github.com/chrismaille/glue-demo/actions)
+[![deploy](https://github.com/chrismaille/glue-demo/actions/workflows/release.yml/badge.svg)](https://github.com/chrismaille/glue-demo/actions/workflows/release.yml)
 [![Python](https://img.shields.io/badge/python-3.7-green)](https://www.python.org)
 [![Conventional Commits](https://img.shields.io/badge/Conventional%20Commits-1.0.0-yellow.svg)](https://conventionalcommits.org)
 [![Code style: black](https://img.shields.io/badge/code%20style-black-000000.svg)](https://github.com/psf/black)
